@@ -103,6 +103,34 @@ CREATE TABLE IF NOT EXISTS charge_lines (
   codes TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (run_id, waybill_no)
 );
+CREATE TABLE IF NOT EXISTS zone_reviews (
+  run_id TEXT NOT NULL,
+  waybill_no TEXT NOT NULL,
+  carrier_zone TEXT NOT NULL DEFAULT '',
+  contract_zone TEXT NOT NULL DEFAULT '',
+  settled_zone TEXT NOT NULL DEFAULT '',
+  basis TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  address_text TEXT NOT NULL DEFAULT '',
+  address_source TEXT NOT NULL DEFAULT '',
+  address_received_utc TEXT NOT NULL DEFAULT '',
+  evidence TEXT NOT NULL DEFAULT '',
+  rate_version_id TEXT NOT NULL DEFAULT '',
+  total_amount TEXT NOT NULL DEFAULT '0.00',
+  codes TEXT NOT NULL DEFAULT '',
+  locked INTEGER NOT NULL DEFAULT 0,
+  decided_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (run_id, waybill_no)
+);
+CREATE TABLE IF NOT EXISTS zone_holds (
+  run_id TEXT NOT NULL,
+  line_no INTEGER NOT NULL,
+  waybill_no TEXT NOT NULL DEFAULT '',
+  code TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  raw TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (run_id, line_no, code)
+);
 """
 
 
@@ -332,3 +360,96 @@ def charge_lines(run_id: str) -> list[dict]:
 def latest_run_id() -> str:
     got = one("SELECT run_id FROM runs ORDER BY created_at DESC, run_id DESC LIMIT 1")
     return got["run_id"] if got else ""
+
+
+# --- M8 分区复核 -----------------------------------------------------------
+
+
+def replace_zone_reviews(run_id: str, items: list[dict]) -> None:
+    """整体重写未锁定的复核行；已锁定（已确认）行原样保留。"""
+    with session() as conn:
+        locked = {
+            row["waybill_no"]
+            for row in conn.execute(
+                "SELECT waybill_no FROM zone_reviews WHERE run_id = ? AND locked = 1", (run_id,)
+            ).fetchall()
+        }
+        conn.execute(
+            "DELETE FROM zone_reviews WHERE run_id = ? AND locked = 0", (run_id,)
+        )
+        conn.executemany(
+            "INSERT INTO zone_reviews (run_id, waybill_no, carrier_zone, contract_zone, "
+            "settled_zone, basis, status, address_text, address_source, address_received_utc, "
+            "evidence, rate_version_id, total_amount, codes, locked, decided_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    run_id, it["waybill_no"], it["carrier_zone"], it["contract_zone"],
+                    it["settled_zone"], it["basis"], it["status"], it["address_text"],
+                    it["address_source"], it["address_received_utc"], it["evidence"],
+                    it["rate_version_id"], it["total_amount"], it["codes"],
+                    int(it.get("locked", 0)), it.get("decided_at", ""),
+                )
+                for it in items
+                if it["waybill_no"] not in locked
+            ],
+        )
+
+
+def zone_reviews(run_id: str) -> list[dict]:
+    return rows("SELECT * FROM zone_reviews WHERE run_id = ? ORDER BY waybill_no", (run_id,))
+
+
+def zone_review(run_id: str, waybill_no: str) -> dict | None:
+    return one(
+        "SELECT * FROM zone_reviews WHERE run_id = ? AND waybill_no = ?",
+        (run_id, waybill_no),
+    )
+
+
+def lock_zone_review(run_id: str, waybill_no: str, settled_zone: str, basis: str,
+                     rate_version_id: str, total_amount: str, codes: str,
+                     decided_at: str) -> None:
+    execute(
+        "UPDATE zone_reviews SET settled_zone = ?, basis = ?, status = 'confirmed', "
+        "rate_version_id = ?, total_amount = ?, codes = ?, locked = 1, decided_at = ? "
+        "WHERE run_id = ? AND waybill_no = ?",
+        (settled_zone, basis, rate_version_id, total_amount, codes, decided_at,
+         run_id, waybill_no),
+    )
+
+
+def locked_zone_reviews(run_id: str) -> list[dict]:
+    return rows(
+        "SELECT * FROM zone_reviews WHERE run_id = ? AND locked = 1 ORDER BY waybill_no",
+        (run_id,),
+    )
+
+
+def replace_zone_holds(run_id: str, items: list[dict]) -> None:
+    with session() as conn:
+        conn.execute("DELETE FROM zone_holds WHERE run_id = ?", (run_id,))
+        conn.executemany(
+            "INSERT OR REPLACE INTO zone_holds (run_id, line_no, waybill_no, code, detail, raw) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (run_id, it["line_no"], it["waybill_no"], it["code"], it["detail"], it["raw"])
+                for it in items
+            ],
+        )
+
+
+def zone_holds(run_id: str) -> list[dict]:
+    return rows("SELECT * FROM zone_holds WHERE run_id = ? ORDER BY line_no, code", (run_id,))
+
+
+def clear_zone_reviews(run_id: str) -> None:
+    execute("DELETE FROM zone_reviews WHERE run_id = ?", (run_id,))
+
+
+def clear_zone_holds(run_id: str) -> None:
+    execute("DELETE FROM zone_holds WHERE run_id = ?", (run_id,))
+
+
+def set_stages(run_id: str, stages: str) -> None:
+    execute("UPDATE runs SET stages = ? WHERE run_id = ?", (stages, run_id))

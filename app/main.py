@@ -19,6 +19,7 @@ from app.modules.m5_charges import service as charge_service
 from app.modules.m5_charges.handler import router as charges_router
 from app.modules.m6_reconcile.handler import router as reconcile_router
 from app.modules.m7_export.handler import router as export_router
+from app.modules.m8_zone_review.handler import router as zone_review_router
 
 
 def bootstrap() -> dict:
@@ -56,6 +57,7 @@ for router in (
     charges_router,
     reconcile_router,
     export_router,
+    zone_review_router,
 ):
     app.include_router(router)
 

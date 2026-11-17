@@ -101,3 +101,10 @@ SAMPLE_RATES_OVERLAP = "rate_cards_overlap.csv"
 SAMPLE_WAYBILLS = "waybills_dirty.csv"
 SAMPLE_WAYBILLS_GB = "waybills_gb18030.csv"
 SAMPLE_WAYBILLS_TRUNC = "waybills_truncated.csv"
+
+# M8 分区复核：承运商回传分区、合同地址簿、收货地址→合同分区对照
+SAMPLE_CARRIER_ZONES = "carrier_zones.csv"
+SAMPLE_CARRIER_ZONES_LATE = "carrier_zones_late.csv"
+SAMPLE_ADDRESS_BOOK = "address_book.csv"
+SAMPLE_ADDRESS_BOOK_PARTIAL = "address_book_partial.csv"
+SAMPLE_ZONE_MAPPING = "contract_zone_map.csv"

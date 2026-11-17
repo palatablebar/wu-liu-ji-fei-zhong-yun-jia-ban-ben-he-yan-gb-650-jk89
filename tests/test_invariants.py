@@ -75,3 +75,45 @@ def test_row_account_balances(pipeline):
     parts = sum(part["value"] for part in accounts["rows"]["parts"])
     assert parts == accounts["rows"]["left_value"]
     assert accounts["rows"]["delta"] == 0
+
+
+def test_zone_review_rerun_never_changes_confirmed_bills(pipeline):
+    """同批重跑不新增账单、不改已确认金额（TRAP-30）。"""
+    from app.modules.m8_zone_review import service as zone_service
+
+    run_id = pipeline["run_id"]
+    zone_service.reset(run_id)
+    zone_service.review_sample(run_id)
+    for waybill_no in ("WB-1001", "WB-1005", "WB-1017"):
+        zone_service.confirm(run_id, waybill_no)
+    snapshot = {
+        row["waybill_no"]: (row["settled_zone"], row["total_amount"], row["rate_version_id"])
+        for row in store.locked_zone_reviews(run_id)
+    }
+    for _ in range(3):
+        zone_service.review_sample(run_id)
+        zone_service.review_sample(run_id, late=True)
+    zone_service.review_sample(run_id)
+    rerun = {
+        row["waybill_no"]: (row["settled_zone"], row["total_amount"], row["rate_version_id"])
+        for row in store.locked_zone_reviews(run_id)
+    }
+    assert rerun == snapshot
+    assert len(rerun) == 3
+    zone_service.reset(run_id)
+
+
+def test_zone_review_does_not_mutate_main_pipeline(pipeline):
+    """M8 复核独立落表，M5 账单行数与应收合计保持原值。"""
+    from app.modules.m8_zone_review import service as zone_service
+
+    run_id = pipeline["run_id"]
+    charge_count_before = len(store.charge_lines(run_id))
+    total_before = store.get_run(run_id)["amount_total"]
+    zone_service.reset(run_id)
+    zone_service.review_sample(run_id)
+    zone_service.confirm(run_id, "WB-1002")
+    zone_service.review_sample(run_id, late=True)
+    assert len(store.charge_lines(run_id)) == charge_count_before
+    assert store.get_run(run_id)["amount_total"] == total_before
+    zone_service.reset(run_id)

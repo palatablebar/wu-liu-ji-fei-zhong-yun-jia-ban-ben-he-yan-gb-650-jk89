@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}分区复核{% endblock %}
+{% block body %}
+<section class="head">
+  <h1>分区复核</h1>
+  <p class="meta">
+    结算依据：合同按收货地址确定的承运分区优先，承运商回传分区仅作对照证据 ·
+    已确认 {{ summary.confirmed or 0 }} 票 · 待确认 {{ summary.open or 0 }} 票 ·
+    挂起 {{ summary.held or 0 }} 票 · 冲突 {{ summary.conflicts or 0 }} 票
+  </p>
+</section>
+
+<div class="rule-line">{{ rule(200) }}</div>
+
+<section class="block">
+  <h2>复核批次</h2>
+  <form class="cmd" data-post="/api/zone-review/run" data-target="#zone-out" data-reload="1">
+    <label class="field"><span>情景</span>
+      <select name="scenario">
+        <option value="full">全量样例（地址齐全）</option>
+        <option value="late">迟到情景（部分地址/回传缺失）</option>
+      </select>
+    </label>
+    <label class="field"><span>回传分区</span><input type="file" name="carrier_file" accept=".csv"></label>
+    <label class="field"><span>地址簿</span><input type="file" name="address_file" accept=".csv"></label>
+    <label class="field"><span>分区对照</span><input type="file" name="mapping_file" accept=".csv"></label>
+    <button type="submit" class="btn">运行复核</button>
+  </form>
+  <pre id="zone-out" class="out">待运行。规则：地址迟到或依据不足的票挂起，不混入正式结果；同批重跑不新增账单、不改已确认金额。</pre>
+  <p class="meta">
+    样例：{{ samples.carrier }} · {{ samples.address }} · {{ samples.mapping }}
+  </p>
+</section>
+
+<div class="rule-line">{{ rule(200) }}</div>
+
+{% if summary %}
+<section class="block">
+  <h2>出账口径</h2>
+  <dl class="ledger">
+    <div><dt>已确认应收（正式账单）</dt><dd class="num strong">{{ summary.confirmed_total|money }}</dd></div>
+    <div><dt>待确认金额（不入正式账）</dt><dd class="num">{{ summary.open_total|money }}</dd></div>
+    <div><dt>挂起票数</dt><dd class="num">{{ summary.held }}</dd></div>
+    <div><dt>冲突票数</dt><dd class="num">{{ summary.conflicts }}</dd></div>
+  </dl>
+  <p class="meta">
+    挂起原因码：{{ summary.hold_codes|join("、") if summary.hold_codes else "无" }} ·
+    挂起行：{{ summary.hold_lines|join(",") if summary.hold_lines else "无" }}
+  </p>
+  <p class="meta">
+    <a href="/api/zone-review/invoice.csv">正式账单 CSV（仅已确认）</a> ·
+    <a href="/api/zone-review/evidence.csv">逐票证据 CSV</a>
+  </p>
+</section>
+
+<div class="rule-line">{{ rule(200) }}</div>
+{% endif %}
+
+<section class="block">
+  <h2>逐票复核</h2>
+  {% if reviews %}
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>运单号</th><th>状态</th><th>回传分区</th><th>合同分区</th>
+        <th>结算分区</th><th>依据</th><th>收货地址证据</th><th>运价版本</th>
+        <th class="num">应收</th><th>标记</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in reviews %}
+      <tr class="{{ 'flag-bad' if row.status == 'held' else ('row-locked' if row.locked else '') }}">
+        <td class="mono">{{ row.waybill_no }}</td>
+        <td>
+          {% if row.status == "confirmed" %}<span class="badge badge-ok">已确认</span>
+          {% elif row.status == "held" %}<span class="badge badge-bad">挂起</span>
+          {% else %}<span class="badge">待确认</span>{% endif %}
+        </td>
+        <td class="mono">{{ row.carrier_zone or "—" }}</td>
+        <td class="mono">{{ row.contract_zone or "—" }}</td>
+        <td class="mono strong">{{ row.settled_zone or "—" }}</td>
+        <td class="mono dim">{{ row.basis or "—" }}</td>
+        <td class="raw" title="{{ row.evidence }}">
+          {{ row.address_text or "地址未到/依据不足" }}
+          <div class="dim mono small">{{ row.address_source }}</div>
+        </td>
+        <td class="mono dim">{{ row.rate_version_id or "—" }}</td>
+        <td class="num strong">{{ row.total_amount|money if row.status != 'held' else "—" }}</td>
+        <td class="mono dim">{{ row.codes }}</td>
+        <td>
+          {% if row.locked %}
+          <span class="dim mono small">已锁定 {{ row.decided_at|local }}</span>
+          {% elif row.status == "open" %}
+          <button class="btn btn-small" data-confirm="{{ row.waybill_no }}"
+                  data-zone="{{ row.contract_zone }}">确认</button>
+          {% else %}
+          <span class="dim mono small">不可出账</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">还没有复核结果，先运行复核批次。</p>
+  {% endif %}
+</section>
+
+<div class="rule-line">{{ rule(200) }}</div>
+
+<section class="block">
+  <h2>挂起隔离（不进正式账单）</h2>
+  {% if holds %}
+  <table class="grid">
+    <thead><tr><th class="num">行</th><th>运单号</th><th>原因码</th><th>证据链</th></tr></thead>
+    <tbody>
+      {% for row in holds %}
+      <tr class="flag-bad">
+        <td class="num">{{ row.line_no }}</td>
+        <td class="mono">{{ row.waybill_no }}</td>
+        <td class="mono">{{ row.code }}</td>
+        <td class="raw">{{ row.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">没有挂起票。</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-confirm]');
+  if (!button) return;
+  event.preventDefault();
+  const payload = {
+    waybill_no: button.dataset.confirm,
+    settled_zone: button.dataset.zone || null,
+  };
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/zone-review/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      window.alert(`${body.code || response.status} ${body.detail || ''}`);
+      button.disabled = false;
+      return;
+    }
+    window.location.reload();
+  } catch (error) {
+    window.alert(`请求失败 ${error.message}`);
+    button.disabled = false;
+  }
+});
+</script>
+{% endblock %}

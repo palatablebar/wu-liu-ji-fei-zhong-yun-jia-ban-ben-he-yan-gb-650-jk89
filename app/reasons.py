@@ -30,6 +30,13 @@ REASONS: dict[str, dict[str, str]] = {
     "MIN_CHARGE_APPLIED": {"label": "最低收费兜底", "level": INFO},
     "VOLUMETRIC_APPLIED": {"label": "体积重大于实重", "level": INFO},
     "ZONE_REMOTE": {"label": "偏远分区附加", "level": INFO},
+    "ZONE_CONFLICT": {"label": "回传分区与合同分区冲突", "level": INFO},
+    "ZONE_MATCH": {"label": "回传分区与合同分区一致", "level": INFO},
+    "ADDR_PENDING": {"label": "收货地址迟到未到", "level": BLOCK},
+    "ADDR_UNUSABLE": {"label": "地址依据不足无法定区", "level": BLOCK},
+    "ZONE_NO_CARD": {"label": "合同分区缺运价版本", "level": BLOCK},
+    "ZONE_BASIS_CONTRACT": {"label": "按合同收货地址分区结算", "level": INFO},
+    "ZONE_BASIS_MANUAL": {"label": "人工裁定分区结算", "level": INFO},
 }
 
 CODES = tuple(REASONS)

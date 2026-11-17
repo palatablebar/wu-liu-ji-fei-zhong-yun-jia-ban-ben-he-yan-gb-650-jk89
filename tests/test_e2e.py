@@ -28,12 +28,13 @@ def test_sample_flow_end_to_end(pipeline):
 
 
 def test_web_pages_return_200(client):
-    pages = ["/", "/waybills", "/weights", "/charges", "/reconcile", "/export"]
+    pages = ["/", "/waybills", "/weights", "/charges", "/zone-review",
+             "/reconcile", "/export"]
     for page in pages:
         response = client.get(page)
         assert response.status_code == 200, page
         assert "freightrate" in response.text
-    assert len(pages) == 6
+    assert len(pages) == 7
 
 
 def test_api_health(client):
@@ -71,3 +72,61 @@ def test_quarantine_endpoints(client):
     body = client.get("/api/quarantine.csv")
     assert body.status_code == 200
     assert body.text.strip().splitlines()[0].startswith("line_no")
+
+
+def test_zone_review_flow_end_to_end(client):
+    from app.modules.m8_zone_review import service as zone_service
+    run = client.get("/api/health").json()["run_id"]
+    zone_service.reset(run)
+    # 全量复核：14 票待确认、1 票地址依据不足挂起、6 票冲突
+    started = client.post("/api/zone-review/run", data={"scenario": "full"}).json()
+    assert started["ok"] is True
+    summary = started["result"]
+    assert summary["held"] == 1
+    assert summary["conflicts"] == 6
+    assert summary["confirmed_total"] == "0.00"
+
+    reviews = client.get("/api/zone-review").json()
+    conflict = next(r for r in reviews["rows"] if r["waybill_no"] == "WB-1001")
+    assert conflict["carrier_zone"] == "Z2"
+    assert conflict["settled_zone"] == "Z1"
+    assert "ZONE_CONFLICT" in conflict["codes"]
+
+    # 人工确认后才进正式账单
+    confirmed = client.post(
+        "/api/zone-review/confirm",
+        json={"run_id": run, "waybill_no": "WB-1001"},
+    ).json()["result"]
+    assert confirmed["total_amount"] == "42.67"
+
+    invoice = client.get("/api/zone-review/invoice.csv").text
+    assert "WB-1001" in invoice and "WB-1019" not in invoice
+    evidence = client.get("/api/zone-review/evidence.csv").text
+    assert len(evidence.strip().splitlines()) == 16  # 表头 + 15 票全部留痕
+
+    # 同批重跑：已确认票金额不变、不新增账单
+    client.post("/api/zone-review/run", data={"scenario": "full"})
+    again = client.get("/api/zone-review").json()["summary"]
+    assert again["confirmed"] == 1
+    assert again["confirmed_total"] == "42.67"
+
+    # 迟到情景：挂起增多，已确认金额仍然不动
+    late = client.post("/api/zone-review/run", data={"scenario": "late"}).json()["result"]
+    assert late["held"] == 4
+    assert late["confirmed_total"] == "42.67"
+    assert "ADDR_PENDING" in late["hold_codes"]
+    zone_service.reset(run)
+
+
+def test_zone_review_locked_ticket_rejects_change(client):
+    from app.modules.m8_zone_review import service as zone_service
+    run = client.get("/api/health").json()["run_id"]
+    zone_service.reset(run)
+    client.post("/api/zone-review/run", data={"scenario": "full"})
+    client.post("/api/zone-review/confirm", json={"waybill_no": "WB-1005"})
+    response = client.post(
+        "/api/zone-review/confirm", json={"waybill_no": "WB-1005", "settled_zone": "Z4"}
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "ZONE_REVIEW_LOCKED"
+    zone_service.reset(run)

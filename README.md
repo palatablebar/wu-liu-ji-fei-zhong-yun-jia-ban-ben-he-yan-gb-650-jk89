@@ -11,6 +11,7 @@
 - 质量隔离：原因码分级、隔离区证据行、可导出 CSV
 - 计费重：体积重按服务除数、取实重与体积重的较大值、按 0.5 kg 台阶向上进位
 - 分区附加：首重价 + 续重单价 × 段数、最低收费兜底、偏远固定额、燃油百分比、保价费率
+- 分区复核：回传分区与合同地址分区冲突裁决、逐票证据链、迟到/依据不足挂起、确认锁定与重跑不可变
 - 账单对账：运单行账、金额账、版本账、计费重账四账相等
 - 导出：账单 CSV、证据 CSV、运行清单 JSON（含 run_id 与输入 sha256）
 
@@ -25,6 +26,7 @@
 | M5 分区附加 | 分区价与附加费叠算 | `POST /api/charges` |
 | M6 账单对账 | 四账核对 | `GET /api/reconcile` |
 | M7 导出 | 账单、证据、清单 | `GET /api/export/invoice.csv` |
+| M8 分区复核 | 冲突裁决、挂起、确认锁定 | `POST /api/zone-review/run` `GET /zone-review` |
 
 ## 核心规则
 
@@ -35,6 +37,9 @@
 4. 兜底：分区价低于 `min_charge` 时补差额到首重项。
 5. 附加：偏远固定额，燃油 = `(基础 + 续重) × fuel_pct`，保价 = `声明价值 × insurance_pct`。
 6. 应收：五个分项之和，先各自量化到分再相加，合计必然等于分项之和。
+7. 分区冲突：承运商回传分区只作证据，结算分区唯一来自合同——收货地址省按分区对照命中的合同分区；
+   地址迟到记 ADDR_PENDING、地址依据不足记 ADDR_UNUSABLE、合同分区无运价记 ZONE_NO_CARD，三类票挂起不进正式账。
+8. 锁定：人工确认后 `locked=1`，同批重跑保留原分区/版本/金额，不新增账单、不改已确认金额。
 
 ## 定义与已知不覆盖
 
@@ -57,18 +62,20 @@ docker compose up -d --build
 2. 运单页点「导入」，得到 27 条记录、15 票计费、12 行隔离与原因码分布
 3. 计费重页点「计算」，看 9 票体积重择用、6 票实重择用
 4. 分区附加页点「计算」，看五个分项与应收 1521.04 元
-5. 账单对账页看四账相等
-6. 导出页取账单 CSV、证据 CSV 与运行清单
+5. 分区复核页点「运行复核」，看 6 票冲突按合同分区重算、1 票地址依据不足挂起；逐票「确认」后正式账单只收已确认票
+6. 账单对账页看四账相等
+7. 导出页取账单 CSV、证据 CSV 与运行清单
 
 ## 目录
 
 ```text
 app/main.py config.py errors.py reasons.py manifest.py store.py web.py
 app/modules/m1_waybill … m7_export   每个模块 handler + service + 2-3 个规则文件
-app/templates   base + 6 页
+app/modules/m8_zone_review           三源输入解析 + 分区裁决 + 锁定服务
+app/templates   base + 7 页
 app/static      theme/layout/components + 3 个 js
 docs/           DEPTH.md DATA-DICTIONARY.md RUNBOOK.md
-sample_data/    rate_cards.csv（干净）与 4 份脏运单
+sample_data/    rate_cards.csv（干净）与 4 份脏运单，M8 三源样例 5 份
 tests/          每模块一个测试文件 + e2e + 不变量
 ```
 
